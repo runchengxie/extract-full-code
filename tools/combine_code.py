@@ -1,22 +1,25 @@
 import os
 import json
 from pathlib import Path
-from typing import Set, Optional
+from typing import Set, Optional, List
 
 # --- CONFIGURATION ---
 try:
     # Assumes the script is in a 'tools' folder inside the project root
     PROJECT_ROOT = Path(__file__).resolve().parent.parent
 except NameError:
-    # Fallback for interactive environments
+    # Fallback for interactive environments where __file__ is not defined
     PROJECT_ROOT = Path.cwd()
 
 OUTPUT_FILENAME = "full_project_source.txt"
 
-# Directories to exclude by an exact match
-EXCLUDE_DIRS_EXACT: Set[str] = {
+# --- EXCLUSION LISTS ---
+
+# Directories to exclude if they appear ANYWHERE in the project structure.
+EXCLUDE_DIRS_ANYWHERE: Set[str] = {
     ".git",
     "__pycache__",
+    ".pytest_cache",
     "cache",
     "output",
     ".vscode",
@@ -27,76 +30,54 @@ EXCLUDE_DIRS_EXACT: Set[str] = {
     "build",
     "dist",
     "renv",
+    "node_modules",
 }
 
-# Directories to exclude ONLY if they are in the project root
-# EXCLUDE_DIRS_ROOT_ONLY: Set[str] = {
-#     "data",
-#     "logs",
-# }
-
-EXCLUDE_DIRS_EXACT: Set[str] = EXCLUDE_DIRS_ANYWHERE.union(EXCLUDE_DIRS_ROOT_ONLY)
-
-# Directory name patterns to exclude (e.g., any directory ending with .egg-info)
-EXCLUDE_DIRS_PATTERNS: tuple[str, ...] = (".egg-info",)
-
-EXCLUDE_EXTS: Set[str] = {
-    ".pyc",
-    ".pyo",
-    ".so",
-    ".dll",
-    ".exe",
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".gif",
-    ".ico",
-    ".svg",
-    ".parquet",
-    ".arrow",
-    ".feather",
-    ".csv",
-    ".zip",
-    ".gz",
-    ".tar",
-    ".rar",
-    ".7z",
-    ".db",
-    ".sqlite3",
-    ".pdf",
-    ".docx",
-    ".xlsx",
+# Directories to exclude ONLY if they are in the project root directory.
+# This allows keeping nested directories with the same name (e.g., 'src/app/data').
+EXCLUDE_DIRS_ROOT_ONLY: Set[str] = {
+    "data",  # User-specific data, not source code
 }
 
+# Directory name patterns to exclude (e.g., any directory ending with .egg-info).
+EXCLUDE_DIR_PATTERNS: tuple[str, ...] = (".egg-info",)
+
+# File extensions to exclude, typically for binary or non-source files.
+EXCLUDE_EXTENSIONS: Set[str] = {
+    ".pyc", ".pyo", ".so", ".dll", ".exe",
+    ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg",
+    ".parquet", ".arrow", ".feather", ".csv", ".zip", ".gz", ".tar", ".rar", ".7z",
+    ".db", ".sqlite3",
+    ".pdf", ".docx", ".xlsx",
+    ".swp", ".swo",
+}
+
+# Specific filenames to exclude.
 EXCLUDE_FILES: Set[str] = {
     OUTPUT_FILENAME,
-    "full_code_text.txt",  # Exclude the old file name just in case
+    "full_project_source.txt",  # Exclude the old file name just in case
     ".DS_Store",
     "Thumbs.db",
-    ".env",
-    "notebook.html",
+    "celerybeat-schedule",
 }
 
 
 def process_notebook(filepath: Path) -> Optional[str]:
     """
-    Parses a Jupyter Notebook (.ipynb) file and extracts only the code and
-    markdown content, ignoring all cell outputs (like images).
+    Parses a Jupyter Notebook (.ipynb) file, extracting only the code and
+    markdown content while ignoring all cell outputs.
     """
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             notebook = json.load(f)
 
-        content_parts = []
+        content_parts: List[str] = []
         for i, cell in enumerate(notebook.get("cells", [])):
             cell_type = cell.get("cell_type")
             source_list = cell.get("source", [])
 
-            # Ensure source is a single string
-            if isinstance(source_list, list):
-                source = "".join(source_list)
-            else:
-                source = str(source_list)
+            # Ensure 'source' is a single string
+            source = "".join(source_list) if isinstance(source_list, list) else str(source_list)
 
             if not source.strip():
                 continue
@@ -114,13 +95,14 @@ def process_notebook(filepath: Path) -> Optional[str]:
 
 def is_likely_text_file(filepath: Path) -> bool:
     """
-    Checks if a file is likely to be a text file.
-    This check is run *after* the specific .ipynb check.
+    Checks if a file is likely to be a text file by checking its extension
+    and sniffing the first 1024 bytes for null characters.
     """
-    if filepath.suffix.lower() in EXCLUDE_EXTS:
+    if filepath.suffix.lower() in EXCLUDE_EXTENSIONS:
         return False
     try:
         with open(filepath, "rb") as f:
+            # If the first 1KB contains a null byte, it's likely a binary file.
             return b"\0" not in f.read(1024)
     except (IOError, PermissionError):
         return False
@@ -128,7 +110,8 @@ def is_likely_text_file(filepath: Path) -> bool:
 
 def combine_project_files() -> None:
     """
-    Scans the project directory and combines all relevant files into a single output file.
+    Scans the project directory, filters out unwanted files/directories,
+    and combines all relevant source code into a single text file.
     """
     output_filepath = PROJECT_ROOT / OUTPUT_FILENAME
 
@@ -142,65 +125,68 @@ def combine_project_files() -> None:
         with open(output_filepath, "w", encoding="utf-8", errors="ignore") as outfile:
             outfile.write("--- Project Source Code Archive ---\n\n")
             outfile.write(
-                "This file contains the concatenated source code of the project, with each file wrapped in tags indicating its relative path.\n\n"
+                "This file contains the concatenated source code of the project, "
+                "with each file wrapped in tags indicating its relative path.\n\n"
             )
 
-            for dirpath, dirnames, filenames in os.walk(PROJECT_ROOT):
-                # It filters a directory if:
-                # 1. Its name is in the exact-match set.
-                # 2. Its name ends with any of the specified patterns.
-                dirnames[:] = [
-                    d
-                    for d in dirnames
-                    if d not in EXCLUDE_DIRS_EXACT
-                    and not any(d.endswith(p) for p in EXCLUDE_DIRS_PATTERNS)
-                ]
+            for dirpath, dirnames, filenames in os.walk(PROJECT_ROOT, topdown=True):
+                current_path = Path(dirpath)
 
+                # We filter 'dirnames' in-place to prevent os.walk from recursing into them.
+                original_dirs = list(dirnames)  # Make a copy to iterate over
+                dirnames.clear()  # Clear the original list to rebuild it
+
+                for d in original_dirs:
+                    # Rule 1: Exclude if the directory name should be excluded anywhere.
+                    if d in EXCLUDE_DIRS_ANYWHERE:
+                        continue
+                    # Rule 2: Exclude if it's a root-only-exclusion and we are at the root.
+                    if d in EXCLUDE_DIRS_ROOT_ONLY and current_path == PROJECT_ROOT:
+                        continue
+                    # Rule 3: Exclude if the directory name matches a pattern.
+                    if any(d.endswith(p) for p in EXCLUDE_DIR_PATTERNS):
+                        continue
+                    # If all checks pass, add the directory back to be traversed.
+                    dirnames.append(d)
+
+                # --- FILE PROCESSING LOGIC ---
                 for filename in sorted(filenames):
                     if filename in EXCLUDE_FILES:
                         continue
 
-                    filepath = Path(dirpath) / filename
+                    filepath = current_path / filename
                     relative_path_str = filepath.relative_to(PROJECT_ROOT).as_posix()
-                    content = None
+                    content: Optional[str] = None
 
                     try:
-                        # 1. First, specifically check for .ipynb files
+                        # Step 1: Specifically handle Jupyter Notebooks.
                         if filepath.suffix.lower() == ".ipynb":
                             print(f"  + Processing Notebook: {relative_path_str}")
                             content = process_notebook(filepath)
-                        # 2. If it's not a notebook, check if it's a general text file
+                        # Step 2: Handle general text files.
                         elif is_likely_text_file(filepath):
                             print(f"  + Processing Text File: {relative_path_str}")
-                            with open(
-                                filepath, "r", encoding="utf-8", errors="ignore"
-                            ) as infile:
+                            with open(filepath, "r", encoding="utf-8", errors="ignore") as infile:
                                 content = infile.read()
-                        # 3. If neither, it's a file to be skipped
+                        # Step 3: If neither, skip the file.
                         else:
-                            print(
-                                f"  - Skipping binary/excluded file: {relative_path_str}"
-                            )
+                            print(f"  - Skipping binary/excluded file: {relative_path_str}")
                             files_skipped_count += 1
                             continue
 
-                        # If content was successfully extracted, write it to the output file
+                        # Write content to the output file if it's not empty.
                         if content and content.strip():
                             outfile.write(f"<{relative_path_str}>\n")
                             outfile.write(content.strip())
                             outfile.write(f"\n</{relative_path_str}>\n\n")
                             files_processed_count += 1
                         else:
-                            print(
-                                f"    [INFO] No content extracted from {relative_path_str}"
-                            )
                             files_skipped_count += 1
+                            print(f"    [INFO] No content extracted from {relative_path_str}")
 
                     except Exception as e:
-                        print(
-                            f"    [ERROR] Could not read file {relative_path_str}: {e}"
-                        )
                         files_skipped_count += 1
+                        print(f"    [ERROR] Could not read file {relative_path_str}: {e}")
 
         print("\n--- Summary ---")
         print(f"Successfully processed {files_processed_count} files.")
