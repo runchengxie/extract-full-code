@@ -26,10 +26,14 @@ EXCLUDE_DIRS_EXACT: Set[str] = {
     "env",
     "build",
     "dist",
-    "logs",
-    "data",
     "renv",
 }
+
+# Directories to exclude ONLY if they are in the project root
+# EXCLUDE_DIRS_ROOT_ONLY: Set[str] = {
+#     "data",
+#     "logs",
+# }
 
 # Directory name patterns to exclude (e.g., any directory ending with .egg-info)
 EXCLUDE_DIRS_PATTERNS: tuple[str, ...] = (".egg-info",)
