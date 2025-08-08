@@ -35,6 +35,8 @@ EXCLUDE_DIRS_EXACT: Set[str] = {
 #     "logs",
 # }
 
+EXCLUDE_DIRS_EXACT: Set[str] = EXCLUDE_DIRS_ANYWHERE.union(EXCLUDE_DIRS_ROOT_ONLY)
+
 # Directory name patterns to exclude (e.g., any directory ending with .egg-info)
 EXCLUDE_DIRS_PATTERNS: tuple[str, ...] = (".egg-info",)
 
