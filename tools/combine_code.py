@@ -21,7 +21,7 @@ EXCLUDE_DIRS_ANYWHERE: Set[str] = {
     "__pycache__",
     ".pytest_cache",
     "cache",
-    "output",
+    "outputs",
     ".vscode",
     ".idea",
     "venv",
