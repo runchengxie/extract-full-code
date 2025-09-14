@@ -1,4 +1,4 @@
-# Project Source Combiner
+# Extract Full Code
 
 Create a single text archive of your project’s source code. 
 
